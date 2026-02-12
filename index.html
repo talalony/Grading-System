@@ -11,8 +11,6 @@
     <!-- pdf-lib and fontkit for custom fonts -->
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
-    <script src="https://unpkg.com/@pdf-lib/fontkit/dist/fontkit.umd.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- Custom Styles -->
@@ -43,7 +41,7 @@
             <button class="btn btn-secondary" id="save-session-btn">💾 Save Session (JSON)</button>
             <button class="btn btn-secondary" onclick="document.getElementById('load-session-input').click()">📂 Load
                 Session (JSON)</button>
-            <input type="file" id="load-session-input" accept=".json" style="display: none;">
+            <input type="file" id="load-session-input" accept=".json" multiple style="display: none;">
             <button class="btn btn-secondary hidden" id="restore-pdfs-btn">📁 Restore PDFs Folder</button>
 
             <button class="btn btn-success" id="export-csv-btn">📊 Export CSV</button>
@@ -70,8 +68,9 @@
                     <span id="page-info" style="padding: 0.4rem;">Page 1/1</span>
                     <button class="tool-btn" id="next-page">▶</button>
                 </div>
-                <div style="font-size: 0.8rem; color: #666;">
+                <div style="font-size: 0.8rem; color: #666; display: flex; gap: 1rem;">
                     <label><input type="color" id="pen-color" value="#ff0000"> Color</label>
+                    <label><input type="number" id="default-text-size" min="6" max="72" value="14" style="width: 60px;"> Text Size</label>
                 </div>
             </div>
 
@@ -104,6 +103,12 @@
                 <div class="total-score">
                     Total: <span id="total-score-val">0</span> / <span id="max-total-score">0</span>
                 </div>
+                <div class="annotation-bank">
+                    <div class="annotation-bank-title">Annotation Bank</div>
+                    <div id="annotation-bank-list" class="annotation-bank-list">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -117,6 +122,32 @@
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="restore-modal-cancel">Cancel</button>
                 <button class="btn" id="restore-modal-btn">Select Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="autosave-restore-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-title">Autosaved Session Found</div>
+            <div class="modal-body">
+                Restore the autosaved session now?
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="autosave-restore-cancel">Cancel</button>
+                <button class="btn" id="autosave-restore-btn">Restore</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="rubric-conflict-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-title">Rubric Conflict</div>
+            <div class="modal-body">
+                Incoming session has a different rubric. Replace current rubric with the incoming one?
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="rubric-conflict-cancel">Keep Current</button>
+                <button class="btn" id="rubric-conflict-btn">Replace</button>
             </div>
         </div>
     </div>

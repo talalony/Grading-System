@@ -17,8 +17,11 @@ const AppState = {
   currentTool: "cursor", // cursor, text, pen, eraser
   penColor: "#ff0000",
   penWidth: 2,
+  textSize: 14,
+  defaultTextSize: 14,
   isDrawing: false,
   currentPath: null, // for temp drawing
+  pendingBankText: null,
 
   // Panning state
   isPanning: false,
@@ -28,11 +31,75 @@ const AppState = {
   // History for Undo/Redo
   history: {},
 
+  // Annotation selection/dragging
+  selectedAnnotation: null,
+  dragOrigin: null,
+  dragMoved: false,
+
   pendingRestoreDocs: null,
+
+  // Annotation Bank (not saved in session)
+  annotationBank: [],
 };
 
 // Utils
 const generateId = () => Math.random().toString(36).substr(2, 9);
+const TEXT_LINE_HEIGHT = 1.2;
+
+// Toast Notification System
+function showToast(message, type = "info", duration = 4000) {
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+
+  const icon =
+    {
+      success: "✓",
+      error: "✕",
+      warning: "⚠",
+      info: "ℹ",
+    }[type] || "ℹ";
+
+  toast.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-message">${message}</span>`;
+
+  document.body.appendChild(toast);
+
+  setTimeout(() => toast.classList.add("toast-show"), 10);
+
+  setTimeout(() => {
+    toast.classList.remove("toast-show");
+    setTimeout(() => document.body.removeChild(toast), 300);
+  }, duration);
+}
+
+// Confirmation Modal Helpers
+function showConfirmModal(modalId, confirmButtonId, cancelButtonId) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById(modalId);
+    const confirmBtn = document.getElementById(confirmButtonId);
+    const cancelBtn = document.getElementById(cancelButtonId);
+
+    modal.classList.remove("hidden");
+
+    const cleanup = () => {
+      modal.classList.add("hidden");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+    };
+
+    const onConfirm = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
 
 const AUTOSAVE_KEY = "grader_autosave_v1";
 let autosaveTimer = null;
@@ -115,6 +182,7 @@ const els = {
 document.addEventListener("DOMContentLoaded", async () => {
   renderRubricInputs();
   renderRubricConfig();
+  renderAnnotationBank();
 
   const autosavedRaw = localStorage.getItem(AUTOSAVE_KEY);
   if (autosavedRaw) {
@@ -123,7 +191,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (autosaved.autosavedAt) {
         updateAutosaveStatus(autosaved.autosavedAt);
       }
-      const shouldRestore = confirm("Autosaved session found. Restore it now?");
+      const shouldRestore = await showConfirmModal(
+        "autosave-restore-modal",
+        "autosave-restore-btn",
+        "autosave-restore-cancel",
+      );
       if (shouldRestore) {
         await applySession(autosaved, { allowFolderPicker: false });
       }
@@ -137,11 +209,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const tag = e.target && e.target.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    const hasModifier = e.ctrlKey || e.metaKey;
+    if (hasModifier && e.code === "KeyZ" && !e.shiftKey) {
       e.preventDefault();
       undo();
     }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+    if (
+      hasModifier &&
+      (e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey))
+    ) {
       e.preventDefault();
       redo();
     }
@@ -181,7 +257,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         AppState.pendingRestoreDocs = null;
         els.restoreModal.classList.add("hidden");
       } catch (err) {
-        alert("Folder selection was canceled.");
+        showToast("Folder selection was canceled", "warning");
       }
     });
   }
@@ -279,7 +355,10 @@ function redo() {
 
 // File Handling
 els.fileInput.addEventListener("change", async (e) => {
-  const files = Array.from(e.target.files);
+  const files = Array.from(e.target.files).filter(
+    (f) =>
+      f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"),
+  );
   for (const file of files) {
     const arrayBuffer = await file.arrayBuffer();
 
@@ -292,7 +371,7 @@ els.fileInput.addEventListener("change", async (e) => {
     }
 
     const doc = {
-      id: existingDocId || generateId(),
+      id: existingDocId || file.name,
       name: file.name,
       file: file,
       arrayBuffer: arrayBuffer,
@@ -339,6 +418,77 @@ function renderDocList() {
     }
 
     els.docList.appendChild(li);
+  });
+}
+
+function renderAnnotationBank() {
+  const bankList = document.getElementById("annotation-bank-list");
+  if (!bankList) return;
+
+  bankList.innerHTML = "";
+
+  if (AppState.annotationBank.length === 0) {
+    bankList.innerHTML =
+      '<div class="annotation-bank-empty">No annotations saved yet</div>';
+    return;
+  }
+
+  AppState.annotationBank.forEach((text, index) => {
+    const item = document.createElement("div");
+    item.className = "annotation-bank-item";
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "annotation-bank-text";
+    textSpan.textContent = text;
+    textSpan.title = text; // Show full text on hover
+
+    item.onclick = () => {
+      // Place text on the current page
+      if (!AppState.currentDocId || !pdfDoc) {
+        showToast("Please open a document first", "warning", 2000);
+        return;
+      }
+
+      const annotCanvas = document.querySelector(".annotation-layer");
+      if (!annotCanvas) {
+        showToast("No page loaded", "warning", 2000);
+        return;
+      }
+
+      // Get the center of the visible canvas area
+      const rect = annotCanvas.getBoundingClientRect();
+      const container = document.getElementById("viewer-container");
+      const containerRect = container.getBoundingClientRect();
+
+      // Calculate center of visible area in screen coordinates
+      const screenX = containerRect.left + containerRect.width / 2;
+      const screenY = containerRect.top + containerRect.height / 2;
+
+      // Calculate canvas coordinates
+      const canvasX = (screenX - rect.left) / AppState.scale;
+      const canvasY = (screenY - rect.top) / AppState.scale;
+
+      // Store the bank text and open text editor
+      AppState.pendingBankText = text;
+      createTextInput(screenX, screenY, canvasX, canvasY, pageNum, annotCanvas);
+
+      // showToast("Click to position text", "info", 2000);
+    };
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "annotation-bank-delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "Remove from bank";
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      AppState.annotationBank.splice(index, 1);
+      renderAnnotationBank();
+      showToast("Removed from annotation bank", "info", 2000);
+    };
+
+    item.appendChild(textSpan);
+    item.appendChild(deleteBtn);
+    bankList.appendChild(item);
   });
 }
 
@@ -471,6 +621,11 @@ document
   .getElementById("pen-color")
   .addEventListener("change", (e) => (AppState.penColor = e.target.value));
 
+document.getElementById("default-text-size").addEventListener("change", (e) => {
+  const size = parseInt(e.target.value) || 14;
+  AppState.defaultTextSize = Math.max(6, Math.min(72, size));
+});
+
 function setupAnnotationEvents(canvas, pNum) {
   const ctx = canvas.getContext("2d");
   let isEraserActive = false;
@@ -513,7 +668,9 @@ function setupAnnotationEvents(canvas, pNum) {
         AppState.isDraggingAnnotation = true;
         AppState.selectedAnnotation = hit; // ref to the object in array
         AppState.dragStart = { x: pos.x, y: pos.y };
-        saveStateForUndo(AppState.currentDocId, pNum);
+        AppState.dragOrigin = { x: pos.x, y: pos.y };
+        AppState.dragMoved = false;
+        AppState.dragUndoSaved = false;
         els.viewerContainer.style.cursor = "move";
       } else {
         // Start Panning
@@ -554,19 +711,6 @@ function setupAnnotationEvents(canvas, pNum) {
   });
 
   // Double-click to edit text annotations
-  canvas.addEventListener("dblclick", (e) => {
-    if (!AppState.currentDocId) return;
-    if (AppState.currentTool !== "cursor") return;
-
-    const pos = getPos(e);
-    const hit = findAnnotationAt(pos.x, pos.y, pNum);
-
-    if (hit && hit.type === "text") {
-      // Edit the text annotation
-      editTextAnnotation(e.clientX, e.clientY, hit, pNum, canvas);
-    }
-  });
-
   canvas.addEventListener("mousemove", (e) => {
     const pos = getPos(e);
 
@@ -582,6 +726,22 @@ function setupAnnotationEvents(canvas, pNum) {
         const dx = pos.x - AppState.dragStart.x;
         const dy = pos.y - AppState.dragStart.y;
         const scale = AppState.scale;
+
+        if (!AppState.dragMoved && AppState.dragOrigin) {
+          const moved = Math.hypot(
+            pos.x - AppState.dragOrigin.x,
+            pos.y - AppState.dragOrigin.y,
+          );
+          if (moved > 2) {
+            AppState.dragMoved = true;
+            if (!AppState.dragUndoSaved) {
+              saveStateForUndo(AppState.currentDocId, pNum);
+              AppState.dragUndoSaved = true;
+            }
+          }
+        }
+
+        if (!AppState.dragMoved) return;
 
         // Convert delta to unscaled coords
         const dxUnscaled = dx / scale;
@@ -617,11 +777,26 @@ function setupAnnotationEvents(canvas, pNum) {
     }
   });
 
-  canvas.addEventListener("mouseup", () => {
+  canvas.addEventListener("mouseup", (e) => {
     if (AppState.isDraggingAnnotation) {
+      const shouldEditText =
+        !AppState.dragMoved &&
+        AppState.selectedAnnotation &&
+        AppState.selectedAnnotation.type === "text";
+
       AppState.isDraggingAnnotation = false;
+      AppState.dragOrigin = null;
+      AppState.dragMoved = false;
+      AppState.dragUndoSaved = false;
+      const annotation = AppState.selectedAnnotation;
       AppState.selectedAnnotation = null;
       els.viewerContainer.style.cursor = "grab";
+
+      if (shouldEditText) {
+        editTextAnnotation(e.clientX, e.clientY, annotation, pNum, canvas);
+      } else if (annotation) {
+        scheduleAutosave();
+      }
     }
     if (AppState.isDrawing) {
       AppState.isDrawing = false;
@@ -652,6 +827,37 @@ window.addEventListener("mouseup", () => {
   }
 });
 
+function getTextBounds(annotation, scale) {
+  const fontSize = annotation.size * scale;
+  const lines = (annotation.text || "").split("\n");
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
+  let left = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  const tx = annotation.x * scale;
+  const ty = annotation.y * scale;
+
+  lines.forEach((line) => {
+    const width = line.length * fontSize * 0.6;
+    const isHebrew = /[\u0590-\u05FF]/.test(line);
+    const lineLeft = isHebrew ? tx - width : tx;
+    const lineRight = isHebrew ? tx : tx + width;
+    left = Math.min(left, lineLeft);
+    right = Math.max(right, lineRight);
+  });
+
+  if (!lines.length) {
+    left = tx;
+    right = tx;
+  }
+
+  return {
+    left,
+    right,
+    top: ty,
+    bottom: ty + lineHeight * Math.max(lines.length, 1),
+  };
+}
+
 function findAnnotationAt(x, y, pNum) {
   const docId = AppState.currentDocId;
   const anns = AppState.annotations[docId]?.[pNum] || [];
@@ -669,16 +875,13 @@ function findAnnotationAt(x, y, pNum) {
         if (dist < hitRadius) return a;
       }
     } else if (a.type === "text") {
-      const tx = a.x * scale;
-      const ty = a.y * scale;
-      const fontSize = a.size * scale;
-      const width = a.text.length * fontSize * 0.6;
-      const height = fontSize * 1.2;
-      const isHebrew = /[\u0590-\u05FF]/.test(a.text);
-      const left = isHebrew ? tx - width : tx;
-      const right = isHebrew ? tx : tx + width;
-
-      if (x >= left && x <= right && y >= ty && y <= ty + height) {
+      const bounds = getTextBounds(a, scale);
+      if (
+        x >= bounds.left &&
+        x <= bounds.right &&
+        y >= bounds.top &&
+        y <= bounds.bottom
+      ) {
         return a;
       }
     }
@@ -708,16 +911,13 @@ function eraseAt(x, y, pNum, canvas) {
         }
       }
     } else if (a.type === "text") {
-      const tx = a.x * scale;
-      const ty = a.y * scale;
-      const fontSize = a.size * scale;
-      const width = a.text.length * fontSize * 0.6;
-      const height = fontSize * 1.2;
-      const isHebrew = /[\u0590-\u05FF]/.test(a.text);
-      const left = isHebrew ? tx - width : tx;
-      const right = isHebrew ? tx : tx + width;
-
-      if (x >= left && x <= right && y >= ty && y <= ty + height) {
+      const bounds = getTextBounds(a, scale);
+      if (
+        x >= bounds.left &&
+        x <= bounds.right &&
+        y >= bounds.top &&
+        y <= bounds.bottom
+      ) {
         hit = true;
       }
     }
@@ -734,85 +934,176 @@ function eraseAt(x, y, pNum, canvas) {
   }
 }
 
-function createTextInput(screenX, screenY, canvasX, canvasY, pNum, canvas) {
+function openTextEditor({
+  screenX,
+  screenY,
+  canvasX,
+  canvasY,
+  pNum,
+  canvas,
+  annotation,
+}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "text-editor-overlay";
+  wrapper.style.left = screenX + "px";
+  wrapper.style.top = screenY + "px";
+
   const input = document.createElement("textarea");
   input.className = "text-input-overlay";
-  input.style.position = "fixed";
-  input.style.left = screenX + "px";
-  input.style.top = screenY + "px";
   input.dir = "auto";
+  input.value = annotation ? annotation.text : AppState.pendingBankText || "";
 
-  document.body.appendChild(input);
+  // Clear pending bank text after using it
+  if (AppState.pendingBankText) {
+    AppState.pendingBankText = null;
+  }
 
-  setTimeout(() => input.focus(), 10);
+  const controls = document.createElement("div");
+  controls.className = "text-editor-controls";
+
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.value = annotation?.color || AppState.penColor;
+
+  const sizeInput = document.createElement("input");
+  sizeInput.type = "number";
+  sizeInput.min = "6";
+  sizeInput.max = "72";
+  sizeInput.value = annotation?.size || AppState.defaultTextSize;
+  sizeInput.className = "text-size-input";
+
+  const sizeLabel = document.createElement("span");
+  sizeLabel.textContent = "Size";
+
+  const addToBankBtn = document.createElement("button");
+  addToBankBtn.textContent = "Add to Bank";
+  addToBankBtn.className = "add-to-bank-btn";
+  addToBankBtn.type = "button";
+  addToBankBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const text = input.value.trim();
+    if (text && !AppState.annotationBank.includes(text)) {
+      AppState.annotationBank.push(text);
+      renderAnnotationBank();
+      showToast("Added to annotation bank", "success", 2000);
+    } else if (text && AppState.annotationBank.includes(text)) {
+      showToast("Already in annotation bank", "info", 2000);
+    }
+  });
+
+  controls.appendChild(colorInput);
+  controls.appendChild(sizeLabel);
+  controls.appendChild(sizeInput);
+  controls.appendChild(addToBankBtn);
+
+  wrapper.appendChild(input);
+  wrapper.appendChild(controls);
+  document.body.appendChild(wrapper);
+
+  const closeEditor = ({ applyChanges }) => {
+    document.removeEventListener("mousedown", handleOutsideClick, true);
+
+    if (applyChanges) {
+      const text = input.value.replace(/\r\n/g, "\n");
+      const size = Math.max(
+        6,
+        parseFloat(sizeInput.value) || AppState.defaultTextSize,
+      );
+      const color = colorInput.value || AppState.penColor;
+
+      if (text.trim()) {
+        saveStateForUndo(AppState.currentDocId, pNum);
+        if (annotation) {
+          annotation.text = text.trim();
+          annotation.color = color;
+          annotation.size = size;
+        } else {
+          saveAnnotation(pNum, {
+            type: "text",
+            text: text.trim(),
+            x: canvasX,
+            y: canvasY,
+            color,
+            size: size * AppState.scale,
+          });
+        }
+
+        AppState.penColor = color;
+        drawAnnotations(canvas, pNum);
+        scheduleAutosave();
+      }
+    }
+
+    document.body.removeChild(wrapper);
+
+    if (!annotation) {
+      AppState.currentTool = "cursor";
+      document
+        .querySelectorAll(".tool-btn[data-tool]")
+        .forEach((b) => b.classList.remove("active"));
+      const cursorBtn = document.querySelector('.tool-btn[data-tool="cursor"]');
+      if (cursorBtn) cursorBtn.classList.add("active");
+      els.viewerContainer.style.cursor = "grab";
+    }
+  };
+
+  const handleOutsideClick = (e) => {
+    if (!wrapper.contains(e.target)) {
+      closeEditor({ applyChanges: true });
+    }
+  };
+
+  document.addEventListener("mousedown", handleOutsideClick, true);
 
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      input.blur();
+      closeEditor({ applyChanges: true });
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeEditor({ applyChanges: false });
+    } else if (e.key === "Delete" && annotation) {
+      e.preventDefault();
+      // Delete the annotation
+      saveStateForUndo(AppState.currentDocId, pNum);
+      const annots = AppState.annotations[AppState.currentDocId]?.[pNum];
+      if (annots) {
+        const index = annots.indexOf(annotation);
+        if (index > -1) {
+          annots.splice(index, 1);
+        }
+      }
+      drawAnnotations(canvas, pNum);
+      scheduleAutosave();
+      closeEditor({ applyChanges: false });
+      // showToast("Text annotation deleted", "info", 2000);
     }
   });
 
-  input.addEventListener("blur", () => {
-    const text = input.value.trim();
-    if (text) {
-      saveStateForUndo(AppState.currentDocId, pNum);
-      saveAnnotation(pNum, {
-        type: "text",
-        text: text,
-        x: canvasX,
-        y: canvasY,
-        color: AppState.penColor,
-        size: 14 * AppState.scale,
-      });
-      drawAnnotations(canvas, pNum);
-      scheduleAutosave();
-    }
-    document.body.removeChild(input);
+  setTimeout(() => {
+    input.focus();
+    if (annotation) input.select();
+  }, 10);
+}
 
-    AppState.currentTool = "cursor";
-    document
-      .querySelectorAll(".tool-btn[data-tool]")
-      .forEach((b) => b.classList.remove("active"));
-    const cursorBtn = document.querySelector('.tool-btn[data-tool="cursor"]');
-    if (cursorBtn) cursorBtn.classList.add("active");
-    els.viewerContainer.style.cursor = "grab";
+function createTextInput(screenX, screenY, canvasX, canvasY, pNum, canvas) {
+  openTextEditor({
+    screenX,
+    screenY,
+    canvasX,
+    canvasY,
+    pNum,
+    canvas,
   });
 }
 
 function editTextAnnotation(screenX, screenY, annotation, pNum, canvas) {
-  const input = document.createElement("textarea");
-  input.className = "text-input-overlay";
-  input.style.position = "fixed";
-  input.style.left = screenX + "px";
-  input.style.top = screenY + "px";
-  input.dir = "auto";
-  input.value = annotation.text; // Pre-fill with existing text
-
-  document.body.appendChild(input);
-
-  setTimeout(() => {
-    input.focus();
-    input.select(); // Select all text for easy editing
-  }, 10);
-
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      input.blur();
-    }
-  });
-
-  input.addEventListener("blur", () => {
-    const text = input.value.trim();
-    if (text) {
-      saveStateForUndo(AppState.currentDocId, pNum);
-      // Update the existing annotation
-      annotation.text = text;
-      drawAnnotations(canvas, pNum);
-      scheduleAutosave();
-    }
-    document.body.removeChild(input);
+  openTextEditor({
+    screenX,
+    screenY,
+    pNum,
+    canvas,
+    annotation,
   });
 }
 
@@ -862,16 +1153,22 @@ function drawAnnotations(canvas, pNum) {
       ctx.stroke();
     } else if (a.type === "text") {
       ctx.save();
-      ctx.font = `${a.size * scale}px Arial`;
+      const fontSize = a.size * scale;
+      ctx.font = `${fontSize}px Arial`;
       ctx.fillStyle = a.color;
-      if (/[\u0590-\u05FF]/.test(a.text)) {
-        ctx.direction = "rtl";
-        ctx.textAlign = "start";
-      } else {
-        ctx.direction = "ltr";
-        ctx.textAlign = "start";
-      }
-      ctx.fillText(a.text, a.x * scale, a.y * scale + a.size * scale);
+      const lines = (a.text || "").split("\n");
+      const baseX = a.x * scale;
+      const baseY = a.y * scale + fontSize;
+      lines.forEach((line, index) => {
+        if (/[\u0590-\u05FF]/.test(line)) {
+          ctx.direction = "rtl";
+          ctx.textAlign = "start";
+        } else {
+          ctx.direction = "ltr";
+          ctx.textAlign = "start";
+        }
+        ctx.fillText(line, baseX, baseY + index * fontSize * TEXT_LINE_HEIGHT);
+      });
       ctx.restore();
     }
   });
@@ -1013,11 +1310,14 @@ async function restoreSessionDocumentsFromFolder(docMetas) {
   if (!window.showDirectoryPicker || !docMetas.length) return;
 
   const dirHandle = await window.showDirectoryPicker();
-  AppState.documents = [];
+  const existingByName = new Set(AppState.documents.map((doc) => doc.name));
 
   const missing = [];
   for (const docMeta of docMetas) {
     try {
+      if (existingByName.has(docMeta.name)) {
+        continue;
+      }
       const fileHandle = await dirHandle.getFileHandle(docMeta.name);
       const pdfFile = await fileHandle.getFile();
       const arrayBuffer = await pdfFile.arrayBuffer();
@@ -1039,19 +1339,119 @@ async function restoreSessionDocumentsFromFolder(docMetas) {
   }
 
   if (missing.length) {
-    alert(
-      "Session loaded, but some PDFs were not found in the selected folder:\n" +
-        missing.join("\n"),
+    showToast(
+      `Session loaded, but ${missing.length} PDF${missing.length > 1 ? "s" : ""} not found in folder: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "..." : ""}`,
+      "warning",
+      6000,
     );
   }
 }
 
-async function applySession(session, options = { allowFolderPicker: false }) {
-  AppState.rubric = session.rubric;
-  AppState.annotations = session.annotations;
-  AppState.scores = session.scores;
+function rubricsEqual(a, b) {
+  if (!a || !b) return false;
+  if (!Array.isArray(a.questions) || !Array.isArray(b.questions)) return false;
+  if (a.questions.length !== b.questions.length) return false;
+  for (let i = 0; i < a.questions.length; i++) {
+    const left = a.questions[i];
+    const right = b.questions[i];
+    if (left.id !== right.id) return false;
+    if (left.label !== right.label) return false;
+    if (left.max !== right.max) return false;
+  }
+  return true;
+}
 
-  const oldDocs = session.documents || [];
+async function mergeSessionIntoState(
+  session,
+  options = { promptRubric: true },
+) {
+  const normalized = normalizeSessionData(session);
+
+  if (options.promptRubric && session.rubric) {
+    const differs = !rubricsEqual(AppState.rubric, session.rubric);
+    if (differs) {
+      const replace = await showConfirmModal(
+        "rubric-conflict-modal",
+        "rubric-conflict-btn",
+        "rubric-conflict-cancel",
+      );
+      if (replace) {
+        AppState.rubric = session.rubric;
+      }
+    }
+  } else if (session.rubric) {
+    AppState.rubric = session.rubric;
+  }
+
+  Object.entries(normalized.annotations).forEach(([docId, pages]) => {
+    if (!AppState.annotations[docId]) AppState.annotations[docId] = {};
+    Object.entries(pages).forEach(([pageNum, anns]) => {
+      if (!AppState.annotations[docId][pageNum]) {
+        AppState.annotations[docId][pageNum] = [];
+      }
+      AppState.annotations[docId][pageNum] = AppState.annotations[docId][
+        pageNum
+      ].concat(anns || []);
+    });
+  });
+
+  Object.entries(normalized.scores).forEach(([docId, scores]) => {
+    if (!AppState.scores[docId]) AppState.scores[docId] = {};
+    Object.entries(scores || {}).forEach(([qid, val]) => {
+      if (AppState.scores[docId][qid] === undefined) {
+        AppState.scores[docId][qid] = val;
+      }
+    });
+  });
+
+  window.sessionRestoredDocs = window.sessionRestoredDocs || [];
+  const existingSessionNames = new Set(
+    window.sessionRestoredDocs.map((doc) => doc.name),
+  );
+  normalized.documents.forEach((doc) => {
+    if (!existingSessionNames.has(doc.name)) {
+      window.sessionRestoredDocs.push(doc);
+      existingSessionNames.add(doc.name);
+    }
+  });
+
+  const loadedNames = new Set(AppState.documents.map((doc) => doc.name));
+  return normalized.documents.filter((doc) => !loadedNames.has(doc.name));
+}
+
+function normalizeSessionData(session) {
+  const docs = (session.documents || []).map((doc) => ({ ...doc }));
+  const idMap = {};
+
+  docs.forEach((doc) => {
+    const newId = doc.name;
+    if (doc.id && doc.id !== newId) idMap[doc.id] = newId;
+    doc.id = newId;
+  });
+
+  const remapKeys = (obj) => {
+    const next = {};
+    Object.keys(obj || {}).forEach((key) => {
+      const mapped = idMap[key] || key;
+      next[mapped] = obj[key];
+    });
+    return next;
+  };
+
+  return {
+    documents: docs,
+    annotations: remapKeys(session.annotations || {}),
+    scores: remapKeys(session.scores || {}),
+  };
+}
+
+async function applySession(session, options = { allowFolderPicker: false }) {
+  const normalized = normalizeSessionData(session);
+  AppState.rubric = session.rubric;
+  AppState.annotations = normalized.annotations;
+  AppState.scores = normalized.scores;
+
+  const oldDocs = normalized.documents;
   window.sessionRestoredDocs = oldDocs;
 
   AppState.pendingRestoreDocs = oldDocs;
@@ -1071,14 +1471,19 @@ async function applySession(session, options = { allowFolderPicker: false }) {
         els.restoreModal.classList.add("hidden");
       }
     } catch (err) {
-      alert(
-        "Folder selection was canceled. You can select the folder from the Restore PDFs prompt.",
+      showToast(
+        "Folder selection canceled. Use the Restore PDFs button to try again.",
+        "info",
       );
     }
   } else if (oldDocs.length) {
     // Modal is visible and prompts for folder selection.
   } else {
-    alert("Session loaded. Please re-open the PDF files to continue working.");
+    showToast(
+      "Session loaded. Please re-open the PDF files to continue working.",
+      "info",
+      5000,
+    );
   }
 
   renderRubricInputs();
@@ -1229,18 +1634,39 @@ async function buildGradedPdfBytes(docStruct) {
 document
   .getElementById("load-session-input")
   .addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const text = await file.text();
-    const session = JSON.parse(text);
-    await applySession(session, { allowFolderPicker: true });
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    let missingDocs = [];
+    for (const file of files) {
+      const text = await file.text();
+      const session = JSON.parse(text);
+      const missing = await mergeSessionIntoState(session, {
+        promptRubric: true,
+      });
+      missingDocs = missingDocs.concat(missing);
+    }
+
+    if (missingDocs.length) {
+      AppState.pendingRestoreDocs = missingDocs;
+      if (els.restoreModal) {
+        els.restoreModal.classList.remove("hidden");
+      }
+    }
+
+    renderRubricInputs();
+    renderDocList();
+    scheduleAutosave();
   });
 
 document.getElementById("finalize-btn").addEventListener("click", async () => {
   if (!AppState.currentDocId) return;
 
   if (!window.fontkit) {
-    alert("Error: fontkit is not loaded.");
+    showToast(
+      "Error: Font library not loaded. Please refresh the page.",
+      "error",
+    );
     return;
   }
 
@@ -1267,7 +1693,7 @@ document.getElementById("finalize-btn").addEventListener("click", async () => {
     link.click();
   } catch (e) {
     console.error(e);
-    alert("Error generating PDF: " + e.message);
+    showToast("Error generating PDF: " + e.message, "error", 6000);
   } finally {
     btn.textContent = originalText;
     btn.disabled = false;
@@ -1280,7 +1706,10 @@ document
     if (!AppState.documents.length) return;
 
     if (!window.fontkit) {
-      alert("Error: fontkit is not loaded.");
+      showToast(
+        "Error: Font library not loaded. Please refresh the page.",
+        "error",
+      );
       return;
     }
 
@@ -1316,7 +1745,7 @@ document
       }
     } catch (e) {
       console.error(e);
-      alert("Error exporting PDFs: " + e.message);
+      showToast("Error exporting PDFs: " + e.message, "error", 6000);
     } finally {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -1356,6 +1785,10 @@ function fixHebrewVisual(text) {
   const hasHebrew = /[\u0590-\u05FF]/.test(text);
   if (!hasHebrew) return text; // No need to process pure English
 
+  const tokenRegex =
+    /\d+(?:[.,:/\-]\d+)+|[\u0590-\u05FF]+|[A-Za-z0-9]+|\s+|[^\u0590-\u05FFA-Za-z0-9\s]+/g;
+  const tokens = text.match(tokenRegex) || [text];
+
   const bracketMap = {
     "(": ")",
     ")": "(",
@@ -1365,19 +1798,12 @@ function fixHebrewVisual(text) {
     "}": "{",
   };
 
-  const runs = text.match(/[\u0590-\u05FF]+|[^\u0590-\u05FF]+/g) || [];
-  return runs
-    .map((run) => {
-      if (!/[\u0590-\u05FF]/.test(run)) return run.split("").reverse().join(""); // Reverse English runs
-      const reversed = [...run].reverse().join("");
-      let res = "";
-      for (const char of reversed) {
-        res += bracketMap[char] || char;
-      }
-      return res;
-    })
-    .join("")
-    .split("")
+  return tokens
     .reverse()
+    .map((token) =>
+      Array.from(token)
+        .map((char) => bracketMap[char] || char)
+        .join(""),
+    )
     .join("");
 }
