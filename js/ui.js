@@ -17,6 +17,11 @@ const els = {
     restoreModalBtn: document.getElementById("restore-modal-btn"),
     restoreModalCancel: document.getElementById("restore-modal-cancel"),
     autosaveStatus: document.getElementById("autosave-status"),
+    exportOptionsModal: document.getElementById("export-options-modal"),
+    exportSkipSummaryBtn: document.getElementById("export-skip-summary-btn"),
+    exportPickLocationBtn: document.getElementById("export-pick-location-btn"),
+    exportInstructionBar: document.getElementById("export-instruction-bar"),
+    gradeSummaryPreview: document.getElementById("grade-summary-preview"),
 };
 
 // Toast Notification System

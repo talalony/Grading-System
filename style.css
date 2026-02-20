@@ -1002,6 +1002,7 @@ body {
 }
 
 .score-input[type=number] {
+  appearance: textfield;
   -moz-appearance: textfield;
 }
 
@@ -1012,6 +1013,7 @@ input[type=number]::-webkit-inner-spin-button {
 }
 
 input[type=number] {
+  appearance: textfield;
   -moz-appearance: textfield;
 }
 
@@ -1050,4 +1052,45 @@ input[type=number] {
 #rubric-config {
   max-height: 500px !important;
   overflow-y: auto !important;
+}
+
+/* Export Grade Summary Placement */
+#export-instruction-bar {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  border: 1px solid var(--primary-color);
+  color: var(--primary-color);
+  padding: 0.75rem 1.5rem;
+  border-radius: 9999px;
+  box-shadow: 0 4px 12px rgba(19, 127, 236, 0.2);
+  z-index: 100;
+  font-weight: 500;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+
+#export-instruction-bar kbd {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+}
+
+#grade-summary-preview {
+  position: fixed;
+  border: 2px dashed var(--primary-color);
+  background: rgba(19, 127, 236, 0.1);
+  pointer-events: none;
+  z-index: 9999;
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  font-family: Arial, sans-serif;
+  color: var(--text-color);
 }

@@ -85,7 +85,7 @@ async function loadExportFonts(pdfDoc) {
     return { hebrewFont, latinFont };
 }
 
-async function buildGradedPdfBytes(docStruct) {
+async function buildGradedPdfBytes(docStruct, summaryPos = null) {
     const { PDFDocument, rgb } = PDFLib;
     const pdfDoc = await PDFDocument.load(docStruct.arrayBuffer.slice(0));
 
@@ -93,6 +93,35 @@ async function buildGradedPdfBytes(docStruct) {
 
     const pages = pdfDoc.getPages();
     const docAnns = AppState.annotations[docStruct.id] || {};
+
+    const firstPage = pages[0];
+    const { height: firstPageHeight } = firstPage.getSize();
+
+    if (summaryPos) {
+        let scores = AppState.scores[docStruct.id] || {};
+        let total = 0;
+
+        const lines = AppState.rubric.questions.map(q => {
+            let s = scores[q.id] || 0;
+            total += s;
+            return `${q.label}: ${s}`;
+        });
+        const maxTotal = AppState.rubric.questions.reduce((acc, q) => acc + q.max, 0);
+        lines.push("", `Total: ${total} / ${maxTotal}`);
+
+        const text = lines.join("\n");
+        const size = AppState.defaultTextSize || 14;
+
+        drawMixedText(firstPage, text, {
+            x: summaryPos.x,
+            y: firstPageHeight - summaryPos.y - size,
+            size: size,
+            hebrewFont,
+            latinFont,
+            lineHeight: 1.5,
+            color: rgb(0, 0, 0),
+        });
+    }
 
     for (let i = 0; i < pages.length; i++) {
         const page = pages[i];

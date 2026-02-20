@@ -404,98 +404,181 @@ document
         scheduleAutosave();
     });
 
-document.getElementById("finalize-btn").addEventListener("click", async () => {
+document.getElementById("finalize-btn").addEventListener("click", () => {
     if (!AppState.currentDocId) return;
-
     if (!window.fontkit) {
-        showToast(
-            "Error: Font library not loaded. Please refresh the page.",
-            "error",
-        );
+        showToast("Error: Font library not loaded. Please refresh the page.", "error");
         return;
     }
+    AppState.pendingExportMode = "single";
+    if (els.exportOptionsModal) els.exportOptionsModal.classList.remove("hidden");
+});
 
-    const btn = document.getElementById("finalize-btn");
-    const originalText = btn.textContent;
-    btn.textContent = "⏳ Processing...";
+document.getElementById("finalize-all-btn").addEventListener("click", () => {
+    if (!AppState.documents.length) return;
+    if (!window.fontkit) {
+        showToast("Error: Font library not loaded. Please refresh the page.", "error");
+        return;
+    }
+    AppState.pendingExportMode = "all";
+    if (els.exportOptionsModal) els.exportOptionsModal.classList.remove("hidden");
+});
+
+if (els.exportSkipSummaryBtn) {
+    els.exportSkipSummaryBtn.addEventListener("click", () => {
+        els.exportOptionsModal.classList.add("hidden");
+        executeExport(null);
+    });
+}
+
+if (els.exportPickLocationBtn) {
+    els.exportPickLocationBtn.addEventListener("click", () => {
+        els.exportOptionsModal.classList.add("hidden");
+        startGradeSummaryPlacement();
+    });
+}
+
+let isPlacingSummary = false;
+
+async function startGradeSummaryPlacement() {
+    isPlacingSummary = true;
+    els.exportInstructionBar.classList.remove("hidden");
+    els.gradeSummaryPreview.classList.remove("hidden");
+
+    if (typeof pageNum !== 'undefined' && pageNum !== 1) {
+        pageNum = 1;
+        if (typeof renderPage === 'function') {
+            await renderPage(1);
+        }
+    }
+
+    let firstDoc = AppState.pendingExportMode === "all" ? AppState.documents[0] : AppState.documents.find((d) => d.id === AppState.currentDocId);
+    let sampleScores = AppState.scores[firstDoc?.id] || {};
+    let sampleTotal = 0;
+
+    const rubricLines = AppState.rubric.questions.map((q) => {
+        let sc = sampleScores[q.id] || 0;
+        sampleTotal += sc;
+        return `${q.label}: ${sc}`;
+    });
+    const maxTotal = AppState.rubric.questions.reduce((acc, q) => acc + q.max, 0);
+    rubricLines.push("", `Total: ${sampleTotal} / ${maxTotal}`);
+
+    els.gradeSummaryPreview.querySelector(".preview-content").innerHTML = rubricLines.join("<br>");
+
+    const container = document.getElementById("viewer-container");
+    container.style.cursor = "crosshair";
+
+    const onMouseMove = (e) => {
+        if (!isPlacingSummary) return;
+
+        const size = AppState.defaultTextSize || 14;
+        const scaledSize = size * AppState.scale;
+
+        els.gradeSummaryPreview.style.left = (e.clientX + 10) + "px"; // Slight offset
+        els.gradeSummaryPreview.style.top = (e.clientY + 10) + "px";
+        els.gradeSummaryPreview.style.fontSize = scaledSize + "px";
+        els.gradeSummaryPreview.style.lineHeight = "1.5";
+    };
+
+    const onClick = (e) => {
+        if (!isPlacingSummary) return;
+        const pageWrapper = e.target.closest(".page-wrapper");
+        if (!pageWrapper) return;
+
+        const annotCanvas = pageWrapper.querySelector(".annotation-layer");
+        if (!annotCanvas) return;
+
+        const rect = annotCanvas.getBoundingClientRect();
+
+        // Calculate canvas coordinates based on click position
+        // Preview is offset by 10px and has 10px padding, making text start at +20
+        const previewX = e.clientX + 20;
+        const previewY = e.clientY + 20;
+
+        const canvasX = (previewX - rect.left) / AppState.scale;
+        const canvasY = (previewY - rect.top) / AppState.scale;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        cleanup();
+
+        executeExport({ x: canvasX, y: canvasY });
+    };
+
+    const onKeyDown = (e) => {
+        if (e.key === "Escape" && isPlacingSummary) {
+            cleanup();
+            AppState.pendingExportMode = null;
+            showToast("Export canceled.", "info", 3000);
+        }
+    };
+
+    const cleanup = () => {
+        isPlacingSummary = false;
+        els.exportInstructionBar.classList.add("hidden");
+        els.gradeSummaryPreview.classList.add("hidden");
+        container.style.cursor = "";
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("click", onClick, true);
+        document.removeEventListener("keydown", onKeyDown);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKeyDown);
+}
+
+async function executeExport(summaryPos = null) {
+    const isAll = AppState.pendingExportMode === "all";
+    const docsToExport = isAll ? AppState.documents : [AppState.documents.find((d) => d.id === AppState.currentDocId)];
+    if (!docsToExport[0]) return;
+
+    const btn = isAll ? document.getElementById("finalize-all-btn") : document.getElementById("finalize-btn");
+    const originalContent = isAll ? btn.innerHTML : btn.textContent;
+
+    if (isAll) {
+        btn.innerHTML = '<span class="material-icons spin">autorenew</span> Saving...';
+    } else {
+        btn.textContent = "⏳ Processing...";
+    }
     btn.disabled = true;
 
     try {
-        const docStruct = AppState.documents.find(
-            (d) => d.id === AppState.currentDocId,
-        );
-        if (!docStruct) throw new Error("Document not found");
-
-        const pdfBytes = await buildGradedPdfBytes(docStruct);
-
-        const blob = new Blob([pdfBytes], {
-            type: "application/pdf",
-        });
-
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `graded_${docStruct.name}`;
-        link.click();
+        if (isAll && window.showDirectoryPicker) {
+            const dirHandle = await window.showDirectoryPicker();
+            for (const doc of docsToExport) {
+                const pdfBytes = await buildGradedPdfBytes(doc, summaryPos);
+                const fileName = `graded_${doc.name}`;
+                const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(new Blob([pdfBytes], { type: "application/pdf" }));
+                await writable.close();
+            }
+        } else {
+            for (const doc of docsToExport) {
+                const pdfBytes = await buildGradedPdfBytes(doc, summaryPos);
+                const blob = new Blob([pdfBytes], { type: "application/pdf" });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `graded_${doc.name}`;
+                link.click();
+            }
+        }
     } catch (e) {
         console.error(e);
-        showToast("Error generating PDF: " + e.message, "error", 6000);
+        showToast("Error exporting: " + e.message, "error", 6000);
     } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-    }
-});
-
-document
-    .getElementById("finalize-all-btn")
-    .addEventListener("click", async () => {
-        if (!AppState.documents.length) return;
-
-        if (!window.fontkit) {
-            showToast(
-                "Error: Font library not loaded. Please refresh the page.",
-                "error",
-            );
-            return;
-        }
-
-        const btn = document.getElementById("finalize-all-btn");
-        const originalContent = btn.innerHTML;
-        btn.innerHTML = '<span class="material-icons spin">autorenew</span> Saving...';
-        btn.disabled = true;
-
-        try {
-            if (window.showDirectoryPicker) {
-                const dirHandle = await window.showDirectoryPicker();
-                for (const doc of AppState.documents) {
-                    const pdfBytes = await buildGradedPdfBytes(doc);
-                    const fileName = `graded_${doc.name}`;
-                    const fileHandle = await dirHandle.getFileHandle(fileName, {
-                        create: true,
-                    });
-                    const writable = await fileHandle.createWritable();
-                    await writable.write(
-                        new Blob([pdfBytes], { type: "application/pdf" }),
-                    );
-                    await writable.close();
-                }
-            } else {
-                for (const doc of AppState.documents) {
-                    const pdfBytes = await buildGradedPdfBytes(doc);
-                    const blob = new Blob([pdfBytes], { type: "application/pdf" });
-                    const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
-                    link.download = `graded_${doc.name}`;
-                    link.click();
-                }
-            }
-        } catch (e) {
-            console.error(e);
-            showToast("Error exporting PDFs: " + e.message, "error", 6000);
-        } finally {
+        if (isAll) {
             btn.innerHTML = originalContent;
-            btn.disabled = false;
+        } else {
+            btn.textContent = originalContent;
         }
-    });
+        btn.disabled = false;
+        AppState.pendingExportMode = null;
+    }
+}
 
 document.getElementById("export-csv-btn").addEventListener("click", () => {
     const rows = [

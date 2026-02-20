@@ -267,6 +267,28 @@
         </div>
     </div>
 
+    <div id="export-options-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-title">Export Settings</div>
+            <div class="modal-body">
+                Would you like to auto-stamp the grade summary for each question on the first page?
+            </div>
+            <div class="modal-actions" style="justify-content: space-between;">
+                <button class="btn btn-secondary" id="export-skip-summary-btn">Skip Summary</button>
+                <button class="btn primary" id="export-pick-location-btn"
+                    style="background-color: var(--primary-color); color: white;">Pick Location</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="export-instruction-bar" class="hidden">
+        Click on the page to place the grade summary, or press <kbd>Esc</kbd> to cancel.
+    </div>
+
+    <div id="grade-summary-preview" class="hidden">
+        <div class="preview-content"></div>
+    </div>
+
     <!-- Custom Logic -->
     <script src="hebrew_font.js"></script>
     <script src="js/annotation_utils.js"></script>

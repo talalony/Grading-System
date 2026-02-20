@@ -40,6 +40,9 @@ const AppState = {
 
     // Annotation Bank (not saved in session)
     annotationBank: [],
+
+    // Export Grade Summary Placement
+    pendingExportMode: null, // 'single' or 'all'
 };
 
 // Utils
