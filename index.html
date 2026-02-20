@@ -4,15 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grading System</title>
+    <title>GradeSync - Grading System</title>
     <!-- PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     <!-- pdf-lib and fontkit for custom fonts -->
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Google Fonts - Lexend -->
+    <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Material Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+        rel="stylesheet">
     <!-- Custom Styles -->
     <link rel="stylesheet" href="style.css">
 </head>
@@ -20,91 +24,189 @@
 <body>
 
     <div id="app">
-        <!-- Sidebar -->
-        <div id="sidebar">
-            <div class="sidebar-header">
-                <span>Grading Tool</span>
-                <span id="autosave-status" class="autosave-status"></span>
+        <!-- Header -->
+        <div id="header">
+            <div class="header-left">
+                <div class="header-logo">
+                    <img src="assets/logo.png" alt="GradeSync Logo" class="header-logo-img">
+                    <span class="header-logo-text">GradeSync</span>
+                </div>
+                <div class="header-divider"></div>
+                <div class="autosave-status">
+                    <span id="autosave-status"></span>
+                </div>
             </div>
+            <div class="header-right">
+                <input type="file" id="session-input" accept=".json" style="display: none;">
+                <button class="header-btn" onclick="document.getElementById('session-input').click()">
+                    <span class="material-icons">upload_file</span>
+                    Load Session
+                </button>
+                <button class="header-btn" id="save-session-btn">
+                    <span class="material-icons">save</span>
+                    Save Session
+                </button>
+                <div class="header-divider"></div>
+                <button class="header-btn bordered" id="export-csv-btn">Export CSV</button>
+                <button class="header-btn bordered" id="finalize-btn">Export</button>
+                <button class="header-btn primary" id="finalize-all-btn">
+                    <span class="material-icons">ios_share</span>
+                    Export All
+                </button>
+            </div>
+        </div>
 
-            <div id="file-input-wrapper">
-                <input type="file" id="file-input" multiple accept=".pdf" style="display: none;">
-                <button class="btn" onclick="document.getElementById('file-input').click()">
-                    📂 Open PDFs
+        <div id="main-container">
+            <!-- Sidebar -->
+            <div id="sidebar">
+                <div class="sidebar-header">
+                    <h2 class="sidebar-title">Files</h2>
+                    <input type="file" id="file-input" multiple accept=".pdf" style="display: none;">
+                    <button class="btn" onclick="document.getElementById('file-input').click()">
+                        <span class="material-icons">file_open</span>
+                        Load PDF
+                    </button>
+                    <div class="search-box">
+                        <span class="material-icons">search</span>
+                        <input type="text" class="search-input" placeholder="Search files..." id="file-search">
+                    </div>
+                </div>
+
+                <ul id="doc-list">
+                    <!-- Document list items -->
+                </ul>
+
+                <input type="file" id="load-session-input" accept=".json" multiple style="display: none;">
+                <button class="btn btn-secondary hidden" id="restore-pdfs-btn">
+                    <span class="material-icons">folder</span>
+                    Restore PDFs Folder
                 </button>
             </div>
 
-            <ul id="doc-list">
-                <!-- Document list items -->
-            </ul>
-
-            <button class="btn btn-secondary" id="save-session-btn">💾 Save Session (JSON)</button>
-            <button class="btn btn-secondary" onclick="document.getElementById('load-session-input').click()">📂 Load
-                Session (JSON)</button>
-            <input type="file" id="load-session-input" accept=".json" multiple style="display: none;">
-            <button class="btn btn-secondary hidden" id="restore-pdfs-btn">📁 Restore PDFs Folder</button>
-
-            <button class="btn btn-success" id="export-csv-btn">📊 Export CSV</button>
-            <button class="btn btn-success" id="finalize-btn">📥 Finalize & Save PDF</button>
-            <button class="btn btn-success" id="finalize-all-btn">📁 Finalize All (Folder)</button>
-        </div>
-
-        <!-- Main Content -->
-        <div id="main-content">
-            <div id="toolbar">
-                <div class="tool-group">
-                    <button class="tool-btn active" data-tool="cursor" title="Cursor (Pan)">👆</button>
-                    <button class="tool-btn" data-tool="text" title="Text Comment">T</button>
-                    <button class="tool-btn" data-tool="pen" title="Pen">✏️</button>
-                    <button class="tool-btn" data-tool="eraser" title="Eraser">🧼</button>
-                </div>
-                <div class="tool-group">
-                    <button class="tool-btn" id="zoom-out">-</button>
-                    <span id="zoom-level" style="padding: 0.4rem;">100%</span>
-                    <button class="tool-btn" id="zoom-in">+</button>
-                </div>
-                <div class="tool-group">
-                    <button class="tool-btn" id="prev-page">◀</button>
-                    <span id="page-info" style="padding: 0.4rem;">Page 1/1</span>
-                    <button class="tool-btn" id="next-page">▶</button>
-                </div>
-                <div style="font-size: 0.8rem; color: #666; display: flex; gap: 1rem;">
-                    <label><input type="color" id="pen-color" value="#ff0000"> Color</label>
-                    <label><input type="number" id="default-text-size" min="6" max="72" value="14" style="width: 60px;"> Text Size</label>
-                </div>
-            </div>
-
-            <div id="viewer-container">
-                <div id="viewer-wrapper"></div>
-            </div>
-        </div>
-
-        <!-- Grading Panel -->
-        <div id="grading-panel">
-            <div class="grading-header">
-                <strong>Rubric</strong>
-                <button class="tool-btn" id="toggle-rubric-config">⚙️ Config</button>
-            </div>
-
-            <div id="rubric-config">
-                <div class="grading-section">
-                    <button class="btn btn-secondary" id="add-question-btn">+ Add Question</button>
-                    <div id="rubric-questions-list">
-                        <!-- Config items -->
+            <!-- Main Content -->
+            <div id="main-content">
+                <!-- Floating Toolbar -->
+                <div id="toolbar">
+                    <div class="tool-group">
+                        <button class="tool-btn active" data-tool="cursor" title="Cursor">
+                            <span class="material-icons">near_me</span>
+                        </button>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="tool-group">
+                        <button class="tool-btn" data-tool="pen" title="Pen Tool">
+                            <span class="material-icons">edit</span>
+                        </button>
+                        <button class="tool-btn" data-tool="text" title="Text Box">
+                            <span class="material-icons">title</span>
+                        </button>
+                        <button class="tool-btn" data-tool="eraser" title="Eraser">
+                            <span class="material-symbols-outlined">ink_eraser</span>
+                        </button>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="tool-group">
+                        <label class="tool-label">
+                            <span class="material-icons" style="font-size: 1.125rem;">palette</span>
+                            <input type="color" id="pen-color" value="#ff0000"
+                                style="width: 36px; height: 28px; border: none; border-radius: 4px; cursor: pointer;"
+                                title="Pen Color">
+                        </label>
+                        <label class="tool-label">
+                            <span class="material-icons" style="font-size: 1.125rem;">format_size</span>
+                            <input type="number" id="default-text-size" value="14" min="8" max="72"
+                                style="width: 50px; padding: 0.25rem; border-radius: 4px; border: 1px solid #ddd;"
+                                title="Text Size">
+                        </label>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="tool-group">
+                        <button class="tool-btn" onclick="undo()" title="Undo">
+                            <span class="material-icons">undo</span>
+                        </button>
+                        <button class="tool-btn" onclick="redo()" title="Redo">
+                            <span class="material-icons">redo</span>
+                        </button>
                     </div>
                 </div>
-                <button class="btn" id="save-rubric-btn">Done</button>
+
+                <!-- PDF Viewer -->
+                <div id="viewer-container">
+                    <div id="viewer-wrapper"></div>
+                </div>
+
+                <!-- Zoom Controls -->
+                <div id="zoom-controls">
+                    <div class="zoom-group">
+                        <button id="zoom-out">
+                            <span class="material-icons">remove</span>
+                        </button>
+                        <span id="zoom-level">100%</span>
+                        <button id="zoom-in">
+                            <span class="material-icons">add</span>
+                        </button>
+                    </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="page-group">
+                        <button id="prev-page">
+                            <span class="material-icons">navigate_before</span>
+                        </button>
+                        <span id="page-info">Page 1 of 1</span>
+                        <button id="next-page">
+                            <span class="material-icons">navigate_next</span>
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            <div id="grading-inputs">
-                <div id="questions-container">
-                    <!-- Grading inputs -->
+            <!-- Grading Panel -->
+            <div id="grading-panel">
+                <!-- Hidden elements for score tracking (used by JavaScript) -->
+                <span id="total-score-val" style="display: none;">0</span>
+                <span id="max-total-score" style="display: none;">0</span>
+
+                <!-- Question Scoring Section -->
+                <div class="grading-section">
+                    <div class="grading-header">
+                        <div>
+                            <h2 class="grading-title">Question Scoring</h2>
+                        </div>
+                        <div class="grading-actions">
+                            <button class="grading-action-btn" id="toggle-rubric-config" title="Configure Rubric">
+                                <span class="material-icons">settings</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="rubric-config">
+                        <div style="padding: 1rem;">
+                            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                                <button class="btn btn-primary" id="add-question-btn" title="Add Question">
+                                    <span class="material-icons">add</span>
+                                </button>
+                                <button class="btn btn-secondary" id="remove-question-btn" title="Remove Last Question">
+                                    <span class="material-icons">remove</span>
+                                </button>
+                            </div>
+                            <div id="rubric-questions-list">
+                                <!-- Config items -->
+                            </div>
+                            <button class="btn" id="save-rubric-btn">Done</button>
+                        </div>
+                    </div>
+
+                    <div id="grading-inputs">
+                        <div id="questions-container">
+                            <!-- Grading inputs -->
+                        </div>
+                    </div>
                 </div>
-                <div class="total-score">
-                    Total: <span id="total-score-val">0</span> / <span id="max-total-score">0</span>
-                </div>
-                <div class="annotation-bank">
-                    <div class="annotation-bank-title">Annotation Bank</div>
+
+                <!-- Annotation Bank Section -->
+                <div class="annotation-bank-section">
+                    <div class="annotation-bank-header">
+                        <h2 class="grading-title">Annotation Bank</h2>
+                    </div>
                     <div id="annotation-bank-list" class="annotation-bank-list">
                         <!-- Dynamic content -->
                     </div>
@@ -152,9 +254,30 @@
         </div>
     </div>
 
+    <div id="bank-merge-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-title">Merge Annotation Bank?</div>
+            <div class="modal-body">
+                This session contains saved annotations. Merge them into your current bank?
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="bank-merge-cancel-btn">Ignore</button>
+                <button class="btn" id="bank-merge-confirm-btn">Merge</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Custom Logic -->
     <script src="hebrew_font.js"></script>
-    <script src="app.js?v=20260210"></script>
+    <script src="js/annotation_utils.js"></script>
+    <script src="js/state.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/session.js"></script>
+    <script src="js/annotations.js"></script>
+    <script src="js/grading.js"></script>
+    <script src="js/pdf-viewer.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/app.js"></script>
 </body>
 
 </html>
